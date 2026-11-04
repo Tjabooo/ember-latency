@@ -1,0 +1,87 @@
+diff -ru ../orig/hud_elements.cpp src/hud_elements.cpp
+--- a/src/hud_elements.cpp	2026-11-04 06:16:08.824816727 +0100
++++ b/src/hud_elements.cpp	2026-11-04 06:16:20.442339426 +0100
+@@ -4,6 +4,10 @@
+ #include <sstream>
+ #include <cmath>
+ #include <map>
++#include <chrono>
++#include <cstdio>
++#include <cstring>
++#include <unistd.h>
+ #include "overlay.h"
+ #include "overlay_params.h"
+ #include "hud_elements.h"
+@@ -1661,6 +1665,42 @@
+     }
+ }
+ 
++// ember: input latency row. Value comes from VK_LAYER_EMBER_latency, which writes
++// /dev/shm/ember-latency/<pid> (line 1 = avg of the last 16 presses in ms).
++// Drawn like the fps_metrics rows; the file is re-read at most 4x a second.
++void HudElements::input_latency(){
++    static char value[16] = "-";
++    static std::chrono::steady_clock::time_point next_read;
++    auto now = std::chrono::steady_clock::now();
++    if (now >= next_read) {
++        next_read = now + std::chrono::milliseconds(250);
++        char path[64];
++        snprintf(path, sizeof(path), "/dev/shm/ember-latency/%d", (int)getpid());
++        char line[16] = "";
++        if (FILE *f = fopen(path, "re")) {
++            if (!fgets(line, sizeof(line), f))
++                line[0] = 0;
++            fclose(f);
++        }
++        line[strcspn(line, "\r\n")] = 0;
++        snprintf(value, sizeof(value), "%s", line[0] ? line : "-");
++    }
++
++    if (!HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_horizontal])
++        ImGui::TableNextRow();
++    ImguiNextColumnFirstItem();
++    HUDElements.TextColored(HUDElements.colors.engine, "%s", "INPUT");
++    ImguiNextColumnOrNewRow();
++    right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "%s", value);
++    if (strcmp(value, "-") != 0) {
++        ImGui::SameLine(0, 1.0f);
++        ImGui::PushFont(HUDElements.sw_stats->font_small);
++        HUDElements.TextColored(HUDElements.colors.text, "ms");
++        ImGui::PopFont();
++    }
++    ImguiNextColumnOrNewRow();
++}
++
+ void HudElements::hdr() {
+     if (HUDElements.hdr_status > 0) {
+         ImguiNextColumnFirstItem();
+@@ -1990,6 +2030,7 @@
+         {"fps_metrics", {fps_metrics}},
+         {"hdr", {hdr}},
+         {"refresh_rate", {refresh_rate}},
++        {"input_latency", {input_latency}},
+         {"winesync", {winesync}},
+         {"present_mode", {present_mode}},
+         {"network", {network}},
+diff -ru ../orig/hud_elements.h src/hud_elements.h
+--- a/src/hud_elements.h	2026-11-04 06:16:08.824835877 +0100
++++ b/src/hud_elements.h	2026-11-04 06:16:08.835900808 +0100
+@@ -112,6 +112,7 @@
+         static void fps_metrics();
+         static void hdr();
+         static void refresh_rate();
++        static void input_latency();
+         static void winesync();
+         static void present_mode();
+         static void network();
+diff -ru ../orig/overlay_params.h src/overlay_params.h
+--- a/src/overlay_params.h	2026-11-04 06:16:08.825339227 +0100
++++ b/src/overlay_params.h	2026-11-04 06:16:08.835839038 +0100
+@@ -125,6 +125,7 @@
+    OVERLAY_PARAM_BOOL(inherit)                       \
+    OVERLAY_PARAM_BOOL(hdr)                           \
+    OVERLAY_PARAM_BOOL(refresh_rate)                  \
++   OVERLAY_PARAM_BOOL(input_latency)                 \
+    OVERLAY_PARAM_BOOL(frame_timing_detailed)         \
+    OVERLAY_PARAM_BOOL(winesync)                      \
+    OVERLAY_PARAM_BOOL(present_mode)                  \

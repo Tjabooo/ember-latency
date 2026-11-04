@@ -1,0 +1,16 @@
+{
+    "file_format_version": "1.0.0",
+    "layer": {
+        "name": "VK_LAYER_EMBER_latency",
+        "type": "GLOBAL",
+        "library_path": "@LIB@",
+        "api_version": "1.4.0",
+        "implementation_version": "1",
+        "description": "ember-latency: input latency estimate for MangoHud",
+        "functions": {
+            "vkNegotiateLoaderLayerInterfaceVersion": "vkNegotiateLoaderLayerInterfaceVersion"
+        },
+        "enable_environment": { "MANGOHUD": "1" },
+        "disable_environment": { "DISABLE_EMBER_LATENCY": "1" }
+    }
+}
