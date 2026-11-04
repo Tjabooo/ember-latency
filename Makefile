@@ -24,4 +24,9 @@ uninstall:
 clean:
 	rm -f $(LIB)
 
-.PHONY: all install uninstall clean
+check:
+	$(CC) $(CFLAGS) -pthread -Wall -Wextra -o tests/x11-present tests/x11-present.c
+	./tests/x11-present
+	rm -f tests/x11-present
+
+.PHONY: all install uninstall clean check

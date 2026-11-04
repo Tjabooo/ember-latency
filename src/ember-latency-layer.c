@@ -292,6 +292,11 @@ static void record(const uint64_t *tins, int n, uint64_t shown, const char *src)
 }
 
 // ---------------------------------------------------------------- dispatch
+typedef struct surface_s {
+    VkSurfaceKHR handle;
+    struct surface_s *next;
+} surface_t;
+
 typedef struct inst_s {
     void *key;
     VkInstance inst;
@@ -299,6 +304,7 @@ typedef struct inst_s {
     PFN_vkDestroyInstance destroy;
     PFN_vkEnumerateDeviceExtensionProperties enum_ext;
     PFN_vkGetPhysicalDeviceFeatures2 feat2;
+    surface_t *x11_surfaces; // known at creation, even when the app owns timing reports
     struct inst_s *next;
 } inst_t;
 
@@ -353,6 +359,7 @@ typedef struct gc_s {          // our fence/semaphore, freed a while after use
 typedef struct ldev_s {
     void *key;
     VkDevice dev;
+    inst_t *instance;
     PFN_vkGetDeviceProcAddr gdpa;
     PFN_vkDestroyDevice destroy;
     PFN_vkQueuePresentKHR present;
@@ -371,7 +378,6 @@ typedef struct ldev_s {
     PFN_vkDestroySemaphore destroy_sem;
     gc_t *gc;
     _Atomic bool active;
-    bool x11;                  // a swapchain here turned out to be XWayland: new ones are too
     _Atomic int hot;           // swapchains that need a look on every present
     _Atomic uint64_t last_ret; // when the previous present returned = next frame's start
     _Atomic int errors;
@@ -397,6 +403,74 @@ static inst_t *find_inst(void *key)
         i = i->next;
     pthread_mutex_unlock(&g_map_mtx);
     return i;
+}
+
+// Wine/DXGI can create a present-id2 swapchain and own its timing queue. In that
+// case we deliberately leave the reports alone, so they cannot teach us the WSI
+// type. Remember Xlib/XCB surfaces directly instead (no per-frame work).
+typedef VkResult (VKAPI_PTR *create_surface_fn)(VkInstance, const void *, const VkAllocationCallbacks *, VkSurfaceKHR *);
+
+static VkResult create_x11_surface(VkInstance instance, const void *ci,
+                                  const VkAllocationCallbacks *alloc, VkSurfaceKHR *out, const char *name)
+{
+    inst_t *i = find_inst(KEY(instance));
+    create_surface_fn create = i ? (create_surface_fn)i->gipa(instance, name) : NULL;
+    if (!create)
+        return VK_ERROR_EXTENSION_NOT_PRESENT;
+    VkResult r = create(instance, ci, alloc, out);
+    if (r == VK_SUCCESS) {
+        surface_t *s = malloc(sizeof *s);
+        if (s) {
+            pthread_mutex_lock(&g_map_mtx);
+            *s = (surface_t){ *out, i->x11_surfaces };
+            i->x11_surfaces = s;
+            pthread_mutex_unlock(&g_map_mtx);
+        }
+    }
+    return r;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL el_CreateXlibSurfaceKHR(VkInstance instance, const void *ci,
+        const VkAllocationCallbacks *alloc, VkSurfaceKHR *out)
+{
+    return create_x11_surface(instance, ci, alloc, out, "vkCreateXlibSurfaceKHR");
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL el_CreateXcbSurfaceKHR(VkInstance instance, const void *ci,
+        const VkAllocationCallbacks *alloc, VkSurfaceKHR *out)
+{
+    return create_x11_surface(instance, ci, alloc, out, "vkCreateXcbSurfaceKHR");
+}
+
+static VKAPI_ATTR void VKAPI_CALL el_DestroySurfaceKHR(VkInstance instance, VkSurfaceKHR surface,
+        const VkAllocationCallbacks *alloc)
+{
+    inst_t *i = find_inst(KEY(instance));
+    if (!i)
+        return;
+    pthread_mutex_lock(&g_map_mtx);
+    for (surface_t **pp = &i->x11_surfaces; *pp; pp = &(*pp)->next) {
+        if ((*pp)->handle == surface) {
+            surface_t *s = *pp;
+            *pp = s->next;
+            free(s);
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_map_mtx);
+    PFN_vkDestroySurfaceKHR destroy = (PFN_vkDestroySurfaceKHR)i->gipa(instance, "vkDestroySurfaceKHR");
+    if (destroy)
+        destroy(instance, surface, alloc);
+}
+
+static bool is_x11_surface(inst_t *i, VkSurfaceKHR surface)
+{
+    bool x11 = false;
+    pthread_mutex_lock(&g_map_mtx);
+    for (surface_t *s = i ? i->x11_surfaces : NULL; s; s = s->next)
+        x11 |= s->handle == surface;
+    pthread_mutex_unlock(&g_map_mtx);
+    return x11;
 }
 
 // Device records are never freed (a few hundred bytes per destroyed device), so the
@@ -513,7 +587,7 @@ static void drain_timing(ldev_t *d, sc_t *s, uint64_t now) // d->mtx held
             // it, it's a stale vblank time, so those frames take the GPU-fence path instead.
             t = t_deq;
             xwl = true;
-            s->x11 = d->x11 = true;
+            s->x11 = true;
         }
         uint64_t seq = ++s->req_done;
         if (g_debug >= 2)
@@ -895,7 +969,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL el_CreateSwapchainKHR(VkDevice device, con
         }
     }
     pthread_mutex_lock(&d->mtx);
-    s->x11 = d->x11;
+    s->x11 = is_x11_surface(d->instance, ci->surface);
     s->next = d->scs;
     d->scs = s;
     pthread_mutex_unlock(&d->mtx);
@@ -1057,6 +1131,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL el_CreateDevice(VkPhysicalDevice pd, const
     }
     d->key = KEY(*out);
     d->dev = *out;
+    d->instance = in;
     d->gdpa = gdpa;
 #define GET(field, name) d->field = (void *)gdpa(*out, name)
     GET(destroy, "vkDestroyDevice");
@@ -1208,6 +1283,11 @@ static VKAPI_ATTR void VKAPI_CALL el_DestroyInstance(VkInstance instance, const 
     if (!i)
         return;
     PFN_vkDestroyInstance destroy = i->destroy;
+    while (i->x11_surfaces) {
+        surface_t *s = i->x11_surfaces;
+        i->x11_surfaces = s->next;
+        free(s);
+    }
     free(i);
     destroy(instance, alloc);
 }
@@ -1247,7 +1327,13 @@ static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL el_GetInstanceProcAddr(VkInstanc
     if (!instance)
         return NULL;
     inst_t *i = find_inst(KEY(instance));
-    return i ? i->gipa(instance, name) : NULL;
+    PFN_vkVoidFunction next = i ? i->gipa(instance, name) : NULL;
+    if (next) {
+        if (!strcmp(name, "vkCreateXlibSurfaceKHR")) return (PFN_vkVoidFunction)el_CreateXlibSurfaceKHR;
+        if (!strcmp(name, "vkCreateXcbSurfaceKHR")) return (PFN_vkVoidFunction)el_CreateXcbSurfaceKHR;
+        if (!strcmp(name, "vkDestroySurfaceKHR")) return (PFN_vkVoidFunction)el_DestroySurfaceKHR;
+    }
+    return next;
 }
 
 EXPORT VKAPI_ATTR VkResult VKAPI_CALL vkNegotiateLoaderLayerInterfaceVersion(VkNegotiateLayerInterface *v)

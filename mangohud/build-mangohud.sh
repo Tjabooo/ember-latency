@@ -7,7 +7,7 @@
 #   sh mangohud/build-mangohud.sh                 # version of the installed mangohud (pacman/dpkg/rpm)
 #   MANGOHUD_VER=0.8.4 sh mangohud/build-mangohud.sh
 #
-# Rerun after your distro updates MangoHud. Undo: rm ~/.local/share/vulkan/implicit_layer.d/MangoHud.x86_64.json
+# Rerun after your distro updates MangoHud. See README for explicit Proton/Lutris selection.
 # Needs: a C++ compiler, python3, curl, patch, and MangoHud's build deps (glslang, libX11, wayland, ...).
 set -eu
 installed_version() {
@@ -37,7 +37,19 @@ meson setup build "MangoHud-v$VER" --buildtype=release -Dwith_xnvctrl=disabled -
 meson compile -C build
 install -m755 build/src/libMangoHud.so "$LIB/libMangoHud.so.new"
 mv "$LIB/libMangoHud.so.new" "$LIB/libMangoHud.so"
-sed "s#\"library_path\": \"[^\"]*\"#\"library_path\": \"$LIB/libMangoHud.so\"#" "$SYSTEM_MANIFEST" \
-  > "$LAYERS/MangoHud.x86_64.json"
+python3 - "$SYSTEM_MANIFEST" "$LIB/libMangoHud.so" "$LAYERS" <<'PY'
+import json, pathlib, sys
+source, library, target = sys.argv[1:]
+manifest = json.loads(pathlib.Path(source).read_text())
+manifest['layer']['library_path'] = library
+target = pathlib.Path(target)
+(target / 'MangoHud.x86_64.json').write_text(json.dumps(manifest, indent=2) + '\n')
+# Pressure-vessel can retain both user and system manifests with the same name,
+# then select the system library. An opt-in unique name makes selection explicit.
+manifest['layer']['name'] = 'VK_LAYER_EMBER_MangoHud'
+manifest['layer']['enable_environment'] = {'EMBER_MANGOHUD': '1'}
+(target / 'ember_mangohud.x86_64.json').write_text(json.dumps(manifest, indent=2) + '\n')
+PY
 echo "Patched MangoHud $VER installed: $LIB/libMangoHud.so"
 echo "Add a line with just  input_latency  to ~/.config/MangoHud/MangoHud.conf"
+echo "For Proton/Lutris also set EMBER_MANGOHUD=1 and VK_LOADER_LAYERS_DISABLE=VK_LAYER_MANGOHUD_overlay_x86_64"

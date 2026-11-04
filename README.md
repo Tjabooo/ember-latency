@@ -30,6 +30,8 @@ key press / click        evdev kernel timestamp (CLOCK_MONOTONIC)
   a stale vblank, so after a press the layer adds one empty `vkQueueSubmit` that waits on the game's
   semaphores and reports when the GPU finished the frame (`xwayland-gpu` in the details line). With
   tearing allowed, that's about when it reaches the screen.
+  Xlib/XCB surfaces are identified at creation, so this also works when DXGI owns its
+  own presentation timing queue (including GTA V Enhanced through Proton).
 - **Without present timing** (other drivers), it falls back to when `vkWaitForPresentKHR` returns,
   and only in FIFO (vsync), where that means something.
 - The readout is the average of your last 16 presses. It's an estimate: it assumes the game reads
@@ -70,8 +72,7 @@ sh mangohud/build-mangohud.sh         # builds the version of MangoHud you have 
 ```
 
 This downloads that MangoHud release, applies [`input-latency.patch`](mangohud/input-latency.patch),
-builds it in `~/.cache`, and installs it as a **user** Vulkan layer that overrides the system
-MangoHud: the layer name is the same, and the loader prefers `~/.local/share`. Your system package
+builds it in `~/.cache`, and installs it as a **user** Vulkan layer. Your system package
 isn't touched. Then add one line to `~/.config/MangoHud/MangoHud.conf`, for example right after
 `fps_metrics`:
 
@@ -80,7 +81,23 @@ input_latency
 ```
 
 Rerun the script after your distro updates MangoHud. The patch was written against **MangoHud 0.8.4**.
-Undo: `rm ~/.local/share/vulkan/implicit_layer.d/MangoHud.x86_64.json`.
+For **Proton/Lutris**, explicitly select the patched copy: a runtime can collect both the user
+and system manifests and choose the system library despite the user override. The build script
+also installs a uniquely named, opt-in manifest. Add these two environment variables to the
+game's Lutris configuration, or prefix its Steam launch command with them:
+
+```sh
+EMBER_MANGOHUD=1 VK_LOADER_LAYERS_DISABLE=VK_LAYER_MANGOHUD_overlay_x86_64 mangohud %command%
+```
+
+Keep MangoHud enabled in Lutris. If `VK_LOADER_LAYERS_DISABLE` already contains other filters,
+append `,VK_LAYER_MANGOHUD_overlay_x86_64` to its value. This disables the duplicate stock 64-bit
+layer while enabling the uniquely named patched one; 32-bit and OpenGL MangoHud are unaffected.
+Relaunch the game and its launcher after changing these variables.
+
+Undo: remove those environment variables and both user manifests,
+`MangoHud.x86_64.json` and `ember_mangohud.x86_64.json`, from
+`~/.local/share/vulkan/implicit_layer.d/`.
 The patched build covers 64-bit Vulkan games. OpenGL and 32-bit games keep the stock MangoHud,
 which ignores the `input_latency` line, so there the row is simply missing.
 
