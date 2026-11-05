@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Ubuntu's libvulkan-dev predates VK_EXT_present_timing, so build against Khronos' headers.
+      - name: Vulkan headers
+        run: git clone --depth 1 --branch v1.4.367 https://github.com/KhronosGroup/Vulkan-Headers.git "$RUNNER_TEMP/vkh"
+      - name: Build
+        run: make CFLAGS="-O2 -I$RUNNER_TEMP/vkh/include"
+      - name: Test
+        run: make check CFLAGS="-O2 -I$RUNNER_TEMP/vkh/include"
