@@ -50,8 +50,11 @@ present path. Benchmarks at 30,000 fps (vkcube) and in CS2 (about 400 fps) were 
 - Your user in the **`input` group**, so the layer can read key-press timestamps from
   `/dev/input/event*`. Be aware that this group lets *any* program you run read your keyboard.
   The layer itself only looks at when keys and buttons go down, never at what you type.
-- Build tools: a C compiler, make, Vulkan headers (Arch: `vulkan-headers`; Debian/Ubuntu:
-  `libvulkan-dev`).
+- Build tools: a C compiler, make, and Vulkan headers recent enough to define
+  `VK_EXT_present_timing` (Arch: `vulkan-headers`). If your distro's package is older (Debian/Ubuntu
+  `libvulkan-dev` often is), point the build at a checkout of
+  [Khronos' Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers):
+  `make CFLAGS="-O2 -I/path/to/Vulkan-Headers/include"` (same for `make install`).
 
 ## Install
 
@@ -133,6 +136,12 @@ Tested with vkcube (Wayland, XWayland and nested gamescope, all present modes), 
 Linux runtime (Proton games: the runtime shares `/dev/input` and `/dev/shm`), and with CS2. Sober
 (a Flatpak) and OpenGL games show `-`.
 
+## Development
+
+`make check` builds and runs `tests/x11-present.c`, which compiles the layer source directly and
+checks X11 surface detection, present-ID handling when DXGI changes the present mode, and the idle
+fast path. It needs no GPU or display.
+
 ## License
 
-MIT
+[MIT](LICENSE)
