@@ -10,10 +10,16 @@
 # Rerun after your distro updates MangoHud. See README for explicit Proton/Lutris selection.
 # Needs: a C++ compiler, python3, curl, patch, and MangoHud's build deps (glslang, libX11, wayland, ...).
 set -eu
+# A pipeline's status is its last command's, so pick the package manager first: `pacman | sed`
+# would "succeed" with no output on a dpkg or rpm system.
 installed_version() {
-    { pacman -Q mangohud 2>/dev/null | sed 's/.* //; s/-.*//'; } ||
-    { dpkg-query -W -f '${Version}' mangohud 2>/dev/null | sed 's/-.*//; s/^[0-9]*://'; } ||
-    { rpm -q --qf '%{VERSION}' mangohud 2>/dev/null; }
+    if command -v pacman >/dev/null 2>&1; then
+        pacman -Q mangohud 2>/dev/null | sed 's/.* //; s/-.*//'
+    elif command -v dpkg-query >/dev/null 2>&1; then
+        dpkg-query -W -f '${Version}' mangohud 2>/dev/null | sed 's/-.*//; s/^[0-9]*://'
+    elif command -v rpm >/dev/null 2>&1; then
+        rpm -q --qf '%{VERSION}' mangohud 2>/dev/null
+    fi
 }
 VER=${MANGOHUD_VER:-$(installed_version || true)}
 [ -n "$VER" ] || { echo "Can't tell which MangoHud you have: set MANGOHUD_VER (e.g. 0.8.4)" >&2; exit 1; }
